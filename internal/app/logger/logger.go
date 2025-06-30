@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 )
@@ -29,6 +30,10 @@ func Info(msg string, args ...any) {
 	Log.Info(msg, args...)
 }
 
+func Infof(format string, args ...any) {
+	Log.Info(fmt.Sprintf(format, args...))
+}
+
 func Error(msg string, args ...any) {
 	Log.Error(msg, args...)
 }
@@ -39,6 +44,10 @@ func Debug(msg string, args ...any) {
 
 func Warn(msg string, args ...any) {
 	Log.Warn(msg, args...)
+}
+
+func Warnf(format string, args ...any) {
+	Log.Warn(fmt.Sprintf(format, args...))
 }
 
 func WithContext(ctx context.Context) *slog.Logger {
