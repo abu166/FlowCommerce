@@ -5,11 +5,9 @@ import (
 )
 
 type Price struct {
-	Symbol    string    `json:"symbol"`
-	Price     float64   `json:"price"`
-	Timestamp int64     `json:"timestamp"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Symbol    string  `json:"symbol"`
+	Price     float64 `json:"price"`
+	Timestamp int64   `json:"timestamp"`
 }
 
 // ToDBModel converts Price to database model (if needed)

@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS prices (
+    symbol VARCHAR(20) PRIMARY KEY,
+    price DECIMAL(20, 8) NOT NULL,
+    timestamp TIMESTAMP NOT NULL
+);

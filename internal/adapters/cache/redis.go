@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"marketflow/config"
 	"marketflow/internal/app/logger"
 	"marketflow/internal/domain/models"
-	"net/http"
+	"net"
+	"os"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -50,28 +52,59 @@ func CloseRedis() error {
 
 // FetchDataFromEndpoint fetches price data from the specified endpoint
 func FetchDataFromEndpoint() ([]models.Price, error) {
-	resp, err := http.Get("http://localhost:8080")
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch data: %v", err)
-	}
-	defer resp.Body.Close()
+    exchangeAddr := os.Getenv("EXCHANGE_ADDR") // Just "exchange:40101"
+    if exchangeAddr == "" {
+        exchangeAddr = "exchange:40101"
+    }
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
+    maxRetries := 3
+    initialTimeout := 5 * time.Second
+    maxTimeout := 15 * time.Second
+    var lastErr error
 
-	var prices []models.Price
-	decoder := json.NewDecoder(resp.Body)
-	for decoder.More() {
-		var p models.Price
-		if err := decoder.Decode(&p); err != nil {
-			logger.Warnf("Failed to decode price data: %v", err)
-			continue
-		}
-		prices = append(prices, p)
-	}
+    for i := 0; i < maxRetries; i++ {
+        timeout := initialTimeout + (time.Duration(i) * 5 * time.Second)
+        if timeout > maxTimeout {
+            timeout = maxTimeout
+        }
 
-	return prices, nil
+        conn, err := net.DialTimeout("tcp", exchangeAddr, timeout)
+        if err != nil {
+            lastErr = fmt.Errorf("dial failed (attempt %d): %v", i+1, err)
+            time.Sleep(1 * time.Second)
+            continue
+        }
+
+        // Set connection deadlines
+        conn.SetDeadline(time.Now().Add(timeout))
+
+        // Simple protocol: send request and read until EOF
+        if _, err := conn.Write([]byte("GET_PRICES\n")); err != nil {
+            conn.Close()
+            lastErr = fmt.Errorf("write failed (attempt %d): %v", i+1, err)
+            time.Sleep(1 * time.Second)
+            continue
+        }
+
+        data, err := io.ReadAll(conn)
+        conn.Close()
+
+        if err != nil {
+            lastErr = fmt.Errorf("read failed (attempt %d): %v", i+1, err)
+            time.Sleep(1 * time.Second)
+            continue
+        }
+
+        var prices []models.Price
+        if err := json.Unmarshal(data, &prices); err != nil {
+            lastErr = fmt.Errorf("decode failed (attempt %d): %v", i+1, err)
+            continue
+        }
+
+        return prices, nil
+    }
+
+    return nil, fmt.Errorf("after %d attempts, last error: %v", maxRetries, lastErr)
 }
 
 // CacheDataInRedis stores price data in Redis with expiration

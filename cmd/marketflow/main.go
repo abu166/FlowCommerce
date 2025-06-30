@@ -4,10 +4,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"marketflow/config"
 	"marketflow/internal/adapters/cache"
 	"marketflow/internal/adapters/postgres"
 	"marketflow/internal/app/logger"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -35,7 +37,7 @@ func main() {
 	logger.Info("connected to PostgreSQL", "host", cfg.DB.Host, "db", cfg.DB.Name)
 
 	// Initialize Redis cache
-	cache.InitRedis(cfg.Redis)
+	cache.InitRedis(cfg)
 	defer cache.CloseRedis()
 
 	// Create basic router
@@ -57,6 +59,18 @@ func main() {
 		w.Write([]byte("MarketFlow API"))
 	})
 
+	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := net.Dial("tcp", "exchange:40101")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer conn.Close()
+
+		w.Header().Set("Content-Type", "application/json")
+		io.Copy(w, conn)
+	})
+
 	// Channel for graceful shutdown
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, syscall.SIGINT, syscall.SIGTERM)
@@ -73,32 +87,40 @@ func main() {
 	go func() {
 		defer wg.Done()
 
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
+
+		logger.Info("Background worker started")
 
 		for {
 			select {
 			case <-ticker.C:
+				logger.Debug("Starting data fetch cycle")
+
 				// Fetch data from endpoint
 				prices, err := cache.FetchDataFromEndpoint()
 				if err != nil {
 					logger.Error("Error fetching data", "error", err)
 					continue
 				}
+				logger.Debug("Fetched prices", "count", len(prices), "first_symbol", prices[0].Symbol)
 
 				// Cache data in Redis
 				if err := cache.CacheDataInRedis(prices); err != nil {
 					logger.Error("Error caching data in Redis", "error", err)
 					continue
 				}
+				logger.Debug("Successfully cached prices in Redis")
 
 				// Save data to PostgreSQL
 				if err := postgres.SavePrices(db, prices); err != nil {
-					logger.Error("Error saving prices to PostgreSQL", "error", err)
+					logger.Error("Error saving prices to PostgreSQL", "error", err, "prices", prices)
 					continue
 				}
-
-				logger.Info("Successfully processed prices", "count", len(prices))
+				logger.Info("Successfully processed prices",
+					"count", len(prices),
+					"redis_success", true,
+					"postgres_success", true)
 
 			case <-ctx.Done():
 				logger.Info("Stopping background worker")
