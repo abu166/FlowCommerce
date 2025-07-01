@@ -20,8 +20,7 @@ import (
 
 func main() {
 	// CLI flags
-	port := flag.Int("port", 8080, "Port number")
-	flag.Parse()
+
 
 	// Load config and init logger
 	cfg := config.Load()
@@ -82,6 +81,16 @@ func main() {
 	// Context for cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+
+	conn, _ := net.Dial("tcp", "exchange:40101")
+    conn.Write([]byte("TEST\n"))
+    buf := make([]byte, 1024)
+    n, _ := conn.Read(buf)
+    fmt.Println("Received:", string(buf[:n]))
+	
+	port := flag.Int("port", 8080, "Port number")
+	flag.Parse()
 
 	// Start background worker for data fetching and saving
 	go func() {

@@ -1,15 +1,15 @@
 package cache
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"marketflow/config"
 	"marketflow/internal/app/logger"
 	"marketflow/internal/domain/models"
 	"net"
-	"os"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -50,111 +50,83 @@ func CloseRedis() error {
 	return nil
 }
 
-// FetchDataFromEndpoint fetches price data from the specified endpoint
 func FetchDataFromEndpoint() ([]models.Price, error) {
-    exchangeAddr := os.Getenv("EXCHANGE_ADDR") // Just "exchange:40101"
-    if exchangeAddr == "" {
-        exchangeAddr = "exchange:40101"
-    }
+	conn, err := net.DialTimeout("tcp", "exchange:40101", 3*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("connection failed: %v", err)
+	}
+	defer conn.Close()
 
-    maxRetries := 3
-    initialTimeout := 5 * time.Second
-    maxTimeout := 15 * time.Second
-    var lastErr error
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
-    for i := 0; i < maxRetries; i++ {
-        timeout := initialTimeout + (time.Duration(i) * 5 * time.Second)
-        if timeout > maxTimeout {
-            timeout = maxTimeout
-        }
+	scanner := bufio.NewScanner(conn)
+	var prices []models.Price
 
-        conn, err := net.DialTimeout("tcp", exchangeAddr, timeout)
-        if err != nil {
-            lastErr = fmt.Errorf("dial failed (attempt %d): %v", i+1, err)
-            time.Sleep(1 * time.Second)
-            continue
-        }
+	for scanner.Scan() {
+		var price models.Price
+		if err := json.Unmarshal(scanner.Bytes(), &price); err != nil {
+			return nil, fmt.Errorf("invalid JSON: %v", err)
+		}
+		prices = append(prices, price)
+	}
 
-        // Set connection deadlines
-        conn.SetDeadline(time.Now().Add(timeout))
+	if len(prices) == 0 {
+		return nil, fmt.Errorf("no valid prices received")
+	}
 
-        // Simple protocol: send request and read until EOF
-        if _, err := conn.Write([]byte("GET_PRICES\n")); err != nil {
-            conn.Close()
-            lastErr = fmt.Errorf("write failed (attempt %d): %v", i+1, err)
-            time.Sleep(1 * time.Second)
-            continue
-        }
-
-        data, err := io.ReadAll(conn)
-        conn.Close()
-
-        if err != nil {
-            lastErr = fmt.Errorf("read failed (attempt %d): %v", i+1, err)
-            time.Sleep(1 * time.Second)
-            continue
-        }
-
-        var prices []models.Price
-        if err := json.Unmarshal(data, &prices); err != nil {
-            lastErr = fmt.Errorf("decode failed (attempt %d): %v", i+1, err)
-            continue
-        }
-
-        return prices, nil
-    }
-
-    return nil, fmt.Errorf("after %d attempts, last error: %v", maxRetries, lastErr)
+	return prices, nil
 }
 
-// CacheDataInRedis stores price data in Redis with expiration
+// CacheDataInRedis - improved version
 func CacheDataInRedis(prices []models.Price) error {
 	ctx := context.Background()
-	expiration := 30 * time.Minute // Prices expire after 30 minutes
+	expiration := 30 * time.Minute
 
+	pipe := client.Pipeline()
 	for _, p := range prices {
-		// Store price data as a hash
-		err := client.HSet(ctx,
+		pipe.HSet(ctx,
 			fmt.Sprintf("price:%s", p.Symbol),
 			map[string]interface{}{
 				"price":     p.Price,
-				"timestamp": p.Timestamp,
+				"timestamp": p.Timestamp, // Stored as int64
 				"updated":   time.Now().Unix(),
 			},
-		).Err()
-		if err != nil {
-			return fmt.Errorf("failed to cache %s: %v", p.Symbol, err)
-		}
-
-		// Set expiration
-		err = client.Expire(ctx, fmt.Sprintf("price:%s", p.Symbol), expiration).Err()
-		if err != nil {
-			return fmt.Errorf("failed to set expiration for %s: %v", p.Symbol, err)
-		}
+		)
+		pipe.Expire(ctx, fmt.Sprintf("price:%s", p.Symbol), expiration)
 	}
 
-	logger.Infof("Successfully cached %d price updates", len(prices))
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to cache prices: %v", err)
+	}
+
+	logger.Infof("Cached %d price updates", len(prices))
 	return nil
 }
 
-// GetPrice retrieves a price from Redis cache
+// GetPrice - improved with better type handling
 func GetPrice(symbol string) (*models.Price, error) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
 	result, err := client.HGetAll(ctx, fmt.Sprintf("price:%s", symbol)).Result()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get price for %s: %v", symbol, err)
+		return nil, fmt.Errorf("redis error: %v", err)
 	}
-
 	if len(result) == 0 {
-		return nil, fmt.Errorf("no price data found for %s", symbol)
+		return nil, fmt.Errorf("price not found for %s", symbol)
 	}
 
 	price := &models.Price{Symbol: symbol}
-	if price.Price, err = parseFloat(result["price"]); err != nil {
-		return nil, err
+
+	// Better float parsing
+	if price.Price, err = strconv.ParseFloat(result["price"], 64); err != nil {
+		return nil, fmt.Errorf("invalid price format: %v", err)
 	}
-	if price.Timestamp, err = parseInt(result["timestamp"]); err != nil {
-		return nil, err
+
+	// Better int64 parsing
+	if price.Timestamp, err = strconv.ParseInt(result["timestamp"], 10, 64); err != nil {
+		return nil, fmt.Errorf("invalid timestamp: %v", err)
 	}
 
 	return price, nil

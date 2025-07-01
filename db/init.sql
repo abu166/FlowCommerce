@@ -1,5 +1,14 @@
-CREATE TABLE IF NOT EXISTS prices (
-    symbol VARCHAR(20) PRIMARY KEY,
-    price DECIMAL(20, 8) NOT NULL,
-    timestamp TIMESTAMP NOT NULL
+-- Отключите зависимости (если есть)
+DROP TABLE prices;
+
+-- Создайте заново
+CREATE TABLE prices (
+    id SERIAL PRIMARY KEY,
+    symbol VARCHAR(20) NOT NULL,
+    price DECIMAL(20,8) NOT NULL,
+    timestamp TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX idx_prices_symbol ON prices(symbol);
+CREATE INDEX idx_prices_timestamp ON prices(timestamp);
