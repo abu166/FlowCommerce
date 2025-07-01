@@ -51,30 +51,55 @@ func CloseRedis() error {
 }
 
 func FetchDataFromEndpoint() ([]models.Price, error) {
-	conn, err := net.DialTimeout("tcp", "exchange:40101", 3*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("connection failed: %v", err)
-	}
-	defer conn.Close()
+    const (
+        maxRetries   = 3
+        batchSize    = 250  // Expected number of prices
+        dialTimeout  = 3 * time.Second
+        readTimeout  = 5 * time.Second
+    )
 
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+    var (
+        prices []models.Price
+        lastErr error
+    )
 
-	scanner := bufio.NewScanner(conn)
-	var prices []models.Price
+    // Retry loop
+    for i := 0; i < maxRetries; i++ {
+        conn, err := net.DialTimeout("tcp", "exchange:40101", dialTimeout)
+        if err != nil {
+            lastErr = fmt.Errorf("connection failed (attempt %d): %v", i+1, err)
+            time.Sleep(time.Duration(i) * time.Second) // Backoff
+            continue
+        }
+        defer conn.Close()
 
-	for scanner.Scan() {
-		var price models.Price
-		if err := json.Unmarshal(scanner.Bytes(), &price); err != nil {
-			return nil, fmt.Errorf("invalid JSON: %v", err)
-		}
-		prices = append(prices, price)
-	}
+        conn.SetReadDeadline(time.Now().Add(readTimeout))
 
-	if len(prices) == 0 {
-		return nil, fmt.Errorf("no valid prices received")
-	}
+        scanner := bufio.NewScanner(conn)
+        prices = nil // Reset buffer
 
-	return prices, nil
+        // Read all lines
+        for scanner.Scan() {
+            var price models.Price
+            if err := json.Unmarshal(scanner.Bytes(), &price); err != nil {
+                lastErr = fmt.Errorf("invalid JSON (attempt %d): %v", i+1, err)
+                break
+            }
+            prices = append(prices, price)
+        }
+
+        // Validate batch size
+        if len(prices) == batchSize {
+            return prices, nil  // Success
+        } else if len(prices) > 0 {
+            lastErr = fmt.Errorf("incomplete batch (got %d, expected %d)", len(prices), batchSize)
+        }
+
+        // Exponential backoff before retry
+        time.Sleep(time.Duration(i*i) * time.Second)
+    }
+
+    return nil, fmt.Errorf("failed after %d retries: %v", maxRetries, lastErr)
 }
 
 // CacheDataInRedis - improved version
