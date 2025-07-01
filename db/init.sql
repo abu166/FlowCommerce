@@ -7,7 +7,7 @@ CREATE TABLE prices (
     symbol VARCHAR(20) NOT NULL,
     price DECIMAL(20,8) NOT NULL,
     timestamp TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_prices_symbol ON prices(symbol);
