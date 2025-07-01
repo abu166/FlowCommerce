@@ -1,34 +1,81 @@
 version: "3.8"
 
 services:
+  exchange:
+    image: exchange1:latest
+    ports:
+      - "40101:40101"
+    networks:
+      - app-network
+
   db:
     image: postgres:16
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
-     - "5432:5432"
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 10s
-      retries:  5
+      retries: 5
       start_period: 30s
-      timeout: 10s 
+      timeout: 10s
+    networks:
+      - app-network
   
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - app-network
+
   app:
     build: .
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "8080:8080"
     environment:
-      DB_HOST: ${DB_HOST}
-      DB_PORT: ${DB_PORT}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_NAME: ${DB_NAME}
-  
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=${DB_USER:-user}
+      - DB_PASSWORD=${DB_PASSWORD:-0000}
+      - DB_NAME=${DB_NAME:-marketflow}
+      - DB_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      - APP_ENV=development
+      - REDIS_EXPIRATION=300
+      - EXCHANGE_URL=exchange:40101  # Add this line
+    volumes:
+      - .:/app
+    restart: unless-stopped
+    networks:
+      - app-network
+
 volumes:
   pgdata:
+  redis_data:
+
+networks:
+  app-network:
+    driver: bridge

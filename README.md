@@ -24,7 +24,7 @@ docker inspect exchange1:latest
 
 to run the exchange server:
 ```bash
-docker run -d -p 8080:40101 --name exchange-server exchange1:latest
+docker run -d -p 40101:40101 --name exchange-server exchange1:latest
 ```
 to check if exchange-server is running:
 
@@ -32,7 +32,7 @@ to check if exchange-server is running:
 docker logs exchange-server
 ```
 
-see localhost:8080 to see the exchange 
+see localhost:40101 to see the exchange 
 
 to stop the server exchange running:
 
