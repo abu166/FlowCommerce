@@ -100,8 +100,6 @@ func main() {
 		defer ticker.Stop()
 
 		logger.Info("Background worker started")
-
-		for {
 			select {
 			case <-ticker.C:
 				logger.Debug("Starting data fetch cycle")
@@ -110,21 +108,21 @@ func main() {
 				prices, err := cache.FetchDataFromEndpoint()
 				if err != nil {
 					logger.Error("Error fetching data", "error", err)
-					continue
+					
 				}
 				logger.Debug("Fetched prices", "count", len(prices), "first_symbol", prices[0].Symbol)
 
 				// Cache data in Redis
 				if err := cache.CacheDataInRedis(prices); err != nil {
 					logger.Error("Error caching data in Redis", "error", err)
-					continue
+					
 				}
 				logger.Debug("Successfully cached prices in Redis")
 
 				// Save data to PostgreSQL
 				if err := postgres.SavePrices(db, prices); err != nil {
 					logger.Error("Error saving prices to PostgreSQL", "error", err, "prices", prices)
-					continue
+					
 				}
 				logger.Info("Successfully processed prices",
 					"count", len(prices),
@@ -135,7 +133,7 @@ func main() {
 				logger.Info("Stopping background worker")
 				return
 			}
-		}
+		
 	}()
 
 	// Start server in a separate goroutine
