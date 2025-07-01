@@ -1,5 +1,5 @@
 -- Отключите зависимости (если есть)
-DROP TABLE prices;
+DROP TABLE IF EXISTS prices ;
 
 -- Создайте заново
 CREATE TABLE prices (
