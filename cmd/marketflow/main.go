@@ -21,7 +21,6 @@ import (
 func main() {
 	// CLI flags
 
-
 	// Load config and init logger
 	cfg := config.Load()
 	logger.Init(cfg.AppEnv)
@@ -82,13 +81,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-
 	conn, _ := net.Dial("tcp", "exchange2:40102")
-    conn.Write([]byte("TEST\n"))
-    buf := make([]byte, 1024)
-    n, _ := conn.Read(buf)
-    fmt.Println("Received:", string(buf[:n]))
-	
+	conn.Write([]byte("TEST\n"))
+	buf := make([]byte, 1024)
+	n, _ := conn.Read(buf)
+	fmt.Println("Received:", string(buf[:n]))
+
 	port := flag.Int("port", 8080, "Port number")
 	flag.Parse()
 
@@ -99,43 +97,40 @@ func main() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 
-
-
 		logger.Info("Background worker started")
 		exchangeOrder := []string{"exchange1:40101", "exchange2:40102", "exchange3:40103"}
-		for i:=0; i < 3; i++{
-			select {
-			case <-ticker.C:
-				logger.Debug("Starting data fetch cycle")
+		for {
+			for i := 0; i < 3; i++ {
+				select {
+				case <-ticker.C:
+					logger.Debug("Starting data fetch cycle")
 
-				// Fetch data from endpoint
-				prices, err := cache.FetchDataFromEndpoint(exchangeOrder[i])
-				if err != nil {
-					logger.Error("Error fetching data", "error", err)
-					
+					// Fetch data from endpoint
+					prices, err := cache.FetchDataFromEndpoint(exchangeOrder[i])
+					if err != nil {
+						logger.Error("Error fetching data", "error", err)
+					}
+					logger.Debug("Fetched prices", "count", len(prices), "first_symbol", prices[0].Symbol)
+
+					// Cache data in Redis
+					if err := cache.CacheDataInRedis(prices); err != nil {
+						logger.Error("Error caching data in Redis", "error", err)
+					}
+					logger.Debug("Successfully cached prices in Redis")
+
+					// Save data to PostgreSQL
+					if err := postgres.SavePrices(db, prices); err != nil {
+						logger.Error("Error saving prices to PostgreSQL", "error", err, "prices", prices)
+					}
+					logger.Info("Successfully processed prices",
+						"count", len(prices),
+						"redis_success", true,
+						"postgres_success", true)
+
+				case <-ctx.Done():
+					logger.Info("Stopping background worker")
+					return
 				}
-				logger.Debug("Fetched prices", "count", len(prices), "first_symbol", prices[0].Symbol)
-
-				// Cache data in Redis
-				if err := cache.CacheDataInRedis(prices); err != nil {
-					logger.Error("Error caching data in Redis", "error", err)
-					
-				}
-				logger.Debug("Successfully cached prices in Redis")
-
-				// Save data to PostgreSQL
-				if err := postgres.SavePrices(db, prices); err != nil {
-					logger.Error("Error saving prices to PostgreSQL", "error", err, "prices", prices)
-					
-				}
-				logger.Info("Successfully processed prices",
-					"count", len(prices),
-					"redis_success", true,
-					"postgres_success", true)
-
-			case <-ctx.Done():
-				logger.Info("Stopping background worker")
-				return
 			}
 		}
 	}()
