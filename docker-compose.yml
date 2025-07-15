@@ -1,13 +1,21 @@
 version: "3.8"
 
 services:
-  exchange:
+  exchange1:
     image: exchange1:latest
     ports:
       - "40101:40101"
     networks:
       - app-network
+  
+  exchange2:
+    image: exchange2:latest
+    ports:
+      - "40102:40102"
+    networks:
+      - app-network
 
+  
   db:
     image: postgres:16
     environment:
@@ -65,7 +73,7 @@ services:
       - REDIS_DB=0
       - APP_ENV=development
       - REDIS_EXPIRATION=300
-      - EXCHANGE_URL=exchange:40101  # Add this line
+      - EXCHANGE_URL=exchange:40101, exchange2:40102  # Add this line
     volumes:
       - .:/app
     restart: unless-stopped

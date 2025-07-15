@@ -83,7 +83,7 @@ func main() {
 	defer cancel()
 
 
-	conn, _ := net.Dial("tcp", "exchange:40101")
+	conn, _ := net.Dial("tcp", "exchange2:40102")
     conn.Write([]byte("TEST\n"))
     buf := make([]byte, 1024)
     n, _ := conn.Read(buf)
@@ -96,16 +96,20 @@ func main() {
 	go func() {
 		defer wg.Done()
 
-		ticker := time.NewTicker(3 * time.Second)
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 
+
+
 		logger.Info("Background worker started")
+		exchangeOrder := []string{"exchange1:40101", "exchange2:40102"}
+		for i:=0; i < 2; i++{
 			select {
 			case <-ticker.C:
 				logger.Debug("Starting data fetch cycle")
 
 				// Fetch data from endpoint
-				prices, err := cache.FetchDataFromEndpoint()
+				prices, err := cache.FetchDataFromEndpoint(exchangeOrder[i])
 				if err != nil {
 					logger.Error("Error fetching data", "error", err)
 					
@@ -133,7 +137,7 @@ func main() {
 				logger.Info("Stopping background worker")
 				return
 			}
-		
+		}
 	}()
 
 	// Start server in a separate goroutine

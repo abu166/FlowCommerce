@@ -50,7 +50,7 @@ func CloseRedis() error {
 	return nil
 }
 
-func FetchDataFromEndpoint() ([]models.Price, error) {
+func FetchDataFromEndpoint(endpoint string) ([]models.Price, error) {
     const (
         maxRetries   = 3
         batchSize    = 250  // Expected number of prices
@@ -65,7 +65,7 @@ func FetchDataFromEndpoint() ([]models.Price, error) {
 
     // Retry loop
     for i := 0; i < maxRetries; i++ {
-        conn, err := net.DialTimeout("tcp", "exchange:40101", dialTimeout)
+        conn, err := net.DialTimeout("tcp", endpoint, dialTimeout)
         if err != nil {
             lastErr = fmt.Errorf("connection failed (attempt %d): %v", i+1, err)
             time.Sleep(time.Duration(i) * time.Second) // Backoff
