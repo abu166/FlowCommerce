@@ -102,8 +102,8 @@ func main() {
 
 
 		logger.Info("Background worker started")
-		exchangeOrder := []string{"exchange1:40101", "exchange2:40102"}
-		for i:=0; i < 2; i++{
+		exchangeOrder := []string{"exchange1:40101", "exchange2:40102", "exchange3:40103"}
+		for i:=0; i < 3; i++{
 			select {
 			case <-ticker.C:
 				logger.Debug("Starting data fetch cycle")

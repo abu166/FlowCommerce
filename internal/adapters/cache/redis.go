@@ -53,7 +53,7 @@ func CloseRedis() error {
 func FetchDataFromEndpoint(endpoint string) ([]models.Price, error) {
     const (
         maxRetries   = 3
-        batchSize    = 250  // Expected number of prices
+        batchSize    = 250 // Expected number of prices
         dialTimeout  = 3 * time.Second
         readTimeout  = 5 * time.Second
     )
@@ -92,7 +92,7 @@ func FetchDataFromEndpoint(endpoint string) ([]models.Price, error) {
         if len(prices) == batchSize {
             return prices, nil  // Success
         } else if len(prices) > 0 {
-            lastErr = fmt.Errorf("incomplete batch (got %d, expected %d)", len(prices), batchSize)
+            lastErr = fmt.Errorf("incomplete batch (got %d, expected %d) in %s", len(prices), batchSize, endpoint)
         }
 
         // Exponential backoff before retry
