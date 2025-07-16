@@ -5,6 +5,7 @@ import (
 )
 
 type Price struct {
+	Exchange string `json:"exchange"`
 	Symbol    string  `json:"symbol"`
 	Price     float64 `json:"price"`
 	Timestamp int64   `json:"timestamp"`

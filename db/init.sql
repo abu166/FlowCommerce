@@ -1,14 +1,17 @@
 
+
 DROP TABLE IF EXISTS prices;
 
 -- Создайте заново
-CREATE TABLE prices (
+CREATE TABLE price_aggregates (
     id SERIAL PRIMARY KEY,
-    symbol VARCHAR(20) NOT NULL,
-    price DECIMAL(20,8) NOT NULL,
+    pair_name VARCHAR(50) NOT NULL,
+    exchange VARCHAR(50) NOT NULL,
     timestamp TIMESTAMP NOT NULL,
-     created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    average_price DOUBLE PRECISION NOT NULL,
+    min_price DOUBLE PRECISION NOT NULL,
+    max_price DOUBLE PRECISION NOT NULL,
+    UNIQUE (pair_name, exchange, timestamp)
 );
-
-CREATE INDEX idx_prices_symbol ON prices(symbol);
-CREATE INDEX idx_prices_timestamp ON prices(timestamp);
+CREATE INDEX idx_prices_symbol ON price_aggregates (symbol);
+CREATE INDEX idx_prices_timestamp ON price_aggregates (timestamp);

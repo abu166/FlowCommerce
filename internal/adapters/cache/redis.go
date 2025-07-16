@@ -10,6 +10,7 @@ import (
 	"marketflow/internal/domain/models"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -18,7 +19,8 @@ import (
 var client *redis.Client
 
 // InitRedis initializes the Redis client with configuration
-func InitRedis(cfg *config.Config) error {
+// Change this function signature
+func InitRedis(cfg *config.Config) (*redis.Client, error) {
 	client = redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port),
 		Password: cfg.Redis.Password,
@@ -31,11 +33,11 @@ func InitRedis(cfg *config.Config) error {
 
 	_, err := client.Ping(ctx).Result()
 	if err != nil {
-		return fmt.Errorf("failed to connect to Redis: %v", err)
+		return nil, fmt.Errorf("failed to connect to Redis: %v", err)
 	}
 
 	logger.Info("Successfully connected to Redis")
-	return nil
+	return client, nil
 }
 
 // CloseRedis closes the Redis connection
@@ -50,74 +52,82 @@ func CloseRedis() error {
 	return nil
 }
 
-func FetchDataFromEndpoint(endpoint string) ([]models.Price, error) {
-    const (
-        maxRetries   = 3
-        batchSize    = 250 // Expected number of prices
-        dialTimeout  = 3 * time.Second
-        readTimeout  = 5 * time.Second
-    )
-
-    var (
-        prices []models.Price
-        lastErr error
-    )
-
-    // Retry loop
-    for i := 0; i < maxRetries; i++ {
-        conn, err := net.DialTimeout("tcp", endpoint, dialTimeout)
-        if err != nil {
-            lastErr = fmt.Errorf("connection failed (attempt %d): %v", i+1, err)
-            time.Sleep(time.Duration(i) * time.Second) // Backoff
-            continue
-        }
-        defer conn.Close()
-
-        conn.SetReadDeadline(time.Now().Add(readTimeout))
-
-        scanner := bufio.NewScanner(conn)
-        prices = nil // Reset buffer
-
-        // Read all lines
-        for scanner.Scan() {
-            var price models.Price
-            if err := json.Unmarshal(scanner.Bytes(), &price); err != nil {
-                lastErr = fmt.Errorf("invalid JSON (attempt %d): %v", i+1, err)
-                break
-            }
-            prices = append(prices, price)
-        }
-
-        // Validate batch size
-        if len(prices) == batchSize {
-            return prices, nil  // Success
-        } else if len(prices) > 0 {
-            lastErr = fmt.Errorf("incomplete batch (got %d, expected %d) in %s", len(prices), batchSize, endpoint)
-        }
-
-        // Exponential backoff before retry
-        time.Sleep(time.Duration(i*i) * time.Second)
-    }
-
-    return nil, fmt.Errorf("failed after %d retries: %v", maxRetries, lastErr)
+// GetRedisClient returns the Redis client
+func GetRedisClient() *redis.Client {
+	return client
 }
 
-// CacheDataInRedis - improved version
+// FetchDataFromEndpoint fetches price data and includes exchange
+func FetchDataFromEndpoint(endpoint string) ([]models.Price, error) {
+	const (
+		maxRetries  = 3
+		dialTimeout = 3 * time.Second
+		readTimeout = 30 * time.Second
+	)
+
+	var (
+		prices  []models.Price
+		lastErr error
+	)
+
+	// Extract exchange name from endpoint (e.g., "exchange1:40101" -> "exchange1")
+	exchange := strings.Split(endpoint, ":")[0]
+
+	for i := 0; i < maxRetries; i++ {
+		conn, err := net.DialTimeout("tcp", endpoint, dialTimeout)
+		if err != nil {
+			lastErr = fmt.Errorf("dial error: %v", err)
+			continue
+		}
+		defer conn.Close()
+
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
+
+		if _, err := conn.Write([]byte("GET_PRICES\n")); err != nil {
+			lastErr = fmt.Errorf("write error: %v", err)
+			continue
+		}
+
+		scanner := bufio.NewScanner(conn)
+		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+
+		for scanner.Scan() {
+			var price models.Price
+			if err := json.Unmarshal(scanner.Bytes(), &price); err != nil {
+				lastErr = fmt.Errorf("invalid JSON: %v", err)
+				break
+			}
+			price.Exchange = exchange
+			prices = append(prices, price)
+		}
+
+		if err := scanner.Err(); err != nil {
+			lastErr = fmt.Errorf("read error: %v", err)
+			continue
+		}
+
+		if len(prices) > 0 {
+			return prices, nil
+		}
+	}
+
+	if len(prices) == 0 {
+		return nil, fmt.Errorf("failed after %d attempts. Last error: %v", maxRetries, lastErr)
+	}
+	return prices, nil
+}
+
+// CacheDataInRedis stores price updates in a hash map
 func CacheDataInRedis(prices []models.Price) error {
 	ctx := context.Background()
-	expiration := 30 * time.Minute
+	expiration := 70 * time.Second // Keep data for 70s to ensure 60s availability
 
 	pipe := client.Pipeline()
 	for _, p := range prices {
-		pipe.HSet(ctx,
-			fmt.Sprintf("price:%s", p.Symbol),
-			map[string]interface{}{
-				"price":     p.Price,
-				"timestamp": p.Timestamp, // Stored as int64
-				"updated":   time.Now().Unix(),
-			},
-		)
-		pipe.Expire(ctx, fmt.Sprintf("price:%s", p.Symbol), expiration)
+		key := fmt.Sprintf("price:%s:%s:updates", p.Exchange, p.Symbol)
+		field := strconv.FormatInt(p.Timestamp, 10)
+		pipe.HSet(ctx, key, field, p.Price)
+		pipe.Expire(ctx, key, expiration)
 	}
 
 	_, err := pipe.Exec(ctx)
@@ -129,32 +139,48 @@ func CacheDataInRedis(prices []models.Price) error {
 	return nil
 }
 
-// GetPrice - improved with better type handling
-func GetPrice(symbol string) (*models.Price, error) {
+// GetPrice retrieves the latest price for a symbol and exchange
+func GetPrice(exchange, symbol string) (*models.Price, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	result, err := client.HGetAll(ctx, fmt.Sprintf("price:%s", symbol)).Result()
+	key := fmt.Sprintf("price:%s:%s:updates", exchange, symbol)
+	result, err := client.HGetAll(ctx, key).Result()
 	if err != nil {
 		return nil, fmt.Errorf("redis error: %v", err)
 	}
 	if len(result) == 0 {
-		return nil, fmt.Errorf("price not found for %s", symbol)
+		return nil, fmt.Errorf("price not found for %s on %s", symbol, exchange)
 	}
 
-	price := &models.Price{Symbol: symbol}
-
-	// Better float parsing
-	if price.Price, err = strconv.ParseFloat(result["price"], 64); err != nil {
-		return nil, fmt.Errorf("invalid price format: %v", err)
+	// Find the latest price by comparing timestamps
+	var latestPrice float64
+	var latestTimestamp int64
+	for ts, priceStr := range result {
+		tsInt, err := strconv.ParseInt(ts, 10, 64)
+		if err != nil {
+			continue
+		}
+		if tsInt > latestTimestamp {
+			latestTimestamp = tsInt
+			price, err := strconv.ParseFloat(priceStr, 64)
+			if err != nil {
+				continue
+			}
+			latestPrice = price
+		}
 	}
 
-	// Better int64 parsing
-	if price.Timestamp, err = strconv.ParseInt(result["timestamp"], 10, 64); err != nil {
-		return nil, fmt.Errorf("invalid timestamp: %v", err)
+	if latestTimestamp == 0 {
+		return nil, fmt.Errorf("no valid price data found for %s on %s", symbol, exchange)
 	}
 
-	return price, nil
+	return &models.Price{
+		Exchange:  exchange,
+		Symbol:    symbol,
+		Price:     latestPrice,
+		Timestamp: latestTimestamp,
+	}, nil
 }
 
 // GetAllPrices retrieves all cached prices
@@ -162,16 +188,21 @@ func GetAllPrices() ([]models.Price, error) {
 	ctx := context.Background()
 	var prices []models.Price
 
-	keys, err := client.Keys(ctx, "price:*").Result()
+	keys, err := client.Keys(ctx, "price:*:*:updates").Result()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get price keys: %v", err)
 	}
 
 	for _, key := range keys {
-		symbol := key[6:] // Remove "price:" prefix
-		price, err := GetPrice(symbol)
+		// Extract exchange and symbol from key (e.g., price:exchange1:BTCUSDT:updates)
+		parts := strings.Split(key, ":")
+		if len(parts) != 4 {
+			continue
+		}
+		exchange, symbol := parts[1], parts[2]
+		price, err := GetPrice(exchange, symbol)
 		if err != nil {
-			logger.Warnf("Failed to get price for %s: %v", symbol, err)
+			logger.Warnf("Failed to get price for %s on %s: %v", symbol, exchange, err)
 			continue
 		}
 		prices = append(prices, *price)
