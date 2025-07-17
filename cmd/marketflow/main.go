@@ -11,22 +11,15 @@ import (
 	"marketflow/internal/adapters/postgres"
 	"marketflow/internal/app/logger"
 	"marketflow/internal/domain/models"
-	"math/rand"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/jmoiron/sqlx"
-)
-
-var (
-	dataMode     string = "live" // Default to live mode
-	dataModeLock sync.RWMutex
 )
 
 func main() {
@@ -60,21 +53,6 @@ func main() {
 	router := http.NewServeMux()
 
 	// Register routes
-	// router.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-	// 	if err := db.Ping(); err != nil {
-	// 		w.WriteHeader(http.StatusServiceUnavailable)
-	// 		w.Write([]byte("DB connection error"))
-	// 		return
-	// 	}
-	// 	if _, err := cache.GetRedisClient().Ping(r.Context()).Result(); err != nil {
-	// 		w.WriteHeader(http.StatusServiceUnavailable)
-	// 		w.Write([]byte("Redis connection error"))
-	// 		return
-	// 	}
-	// 	w.WriteHeader(http.StatusOK)
-	// 	w.Write([]byte("OK"))
-	// })
-
 	router.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("MarketFlow API"))
@@ -119,22 +97,6 @@ func main() {
 	router.HandleFunc("GET /prices/average/{symbol}", handleHistoricalPrice(db, "average_price"))
 	router.HandleFunc("GET /prices/average/{exchange}/{symbol}", handleHistoricalPrice(db, "average_price"))
 
-	router.HandleFunc("POST /mode/test", func(w http.ResponseWriter, r *http.Request) {
-		dataModeLock.Lock()
-		dataMode = "test"
-		dataModeLock.Unlock()
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Switched to test mode"))
-	})
-
-	router.HandleFunc("POST /mode/live", func(w http.ResponseWriter, r *http.Request) {
-		dataModeLock.Lock()
-		dataMode = "live"
-		dataModeLock.Unlock()
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Switched to live mode"))
-	})
-
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := net.Dial("tcp", "exchange:40101")
 		if err != nil {
@@ -165,40 +127,44 @@ func main() {
 	// Start background worker for data fetching and saving
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(1 * time.Minute) // 1-minute cycle
 		defer ticker.Stop()
 
 		logger.Info("Background worker started")
-		exchangeOrder := []string{"exchange1:40101", "exchange2:40102", "exchange3:40103"}
+		exchangeEndpoints := []string{"exchange1:40101", "exchange2:40102", "exchange3:40103"}
 		for {
 			select {
 			case <-ticker.C:
 				logger.Debug("Starting data fetch cycle")
-				for _, endpoint := range exchangeOrder {
+				var allPrices []models.Price
+				for _, endpoint := range exchangeEndpoints {
+					// Check exchange health
+					if err := cache.CheckExchangeHealth(endpoint); err != nil {
+						logger.Error("Exchange health check failed", "endpoint", endpoint, "error", err)
+						continue
+					}
 					var prices []models.Price
 					var err error
-					dataModeLock.RLock()
-					if dataMode == "test" {
-						prices, err = fetchMockData(endpoint)
-					} else {
-						prices, err = cache.FetchDataFromEndpoint(endpoint)
-					}
-					dataModeLock.RUnlock()
+					prices, err = cache.FetchDataFromEndpoint(endpoint)
 					if err != nil {
-						logger.Error("Error fetching data", "error", err)
+						logger.Error("Error fetching data from endpoint", "endpoint", endpoint, "error", err)
 						continue
 					}
-					logger.Debug("Fetched prices", "count", len(prices), "first_symbol", prices[0].Symbol)
-					fmt.Println(prices)
-					if err := cache.CacheDataInRedis(prices); err != nil {
+					logger.Debug("Fetched prices", "endpoint", endpoint, "count", len(prices))
+					allPrices = append(allPrices, prices...)
+				}
+				if len(allPrices) > 0 {
+					if err := cache.CacheDataInRedis(allPrices); err != nil {
 						logger.Error("Error caching data in Redis", "error", err)
-						continue
+					} else {
+						logger.Debug("Successfully cached prices in Redis", "count", len(allPrices))
+						logger.Info("Successfully processed prices",
+							"count", len(allPrices),
+							"redis_success", true,
+							"postgres_success", true)
 					}
-					logger.Debug("Successfully cached prices in Redis")
-					logger.Info("Successfully processed prices",
-						"count", len(prices),
-						"redis_success", true,
-						"postgres_success", true)
+				} else {
+					logger.Warn("No prices fetched from any exchange")
 				}
 			case <-ctx.Done():
 				logger.Info("Stopping background worker")
@@ -226,22 +192,6 @@ func main() {
 	wg.Wait()
 
 	logger.Info("Server stopped gracefully")
-}
-
-// fetchMockData generates mock price data for testing
-func fetchMockData(endpoint string) ([]models.Price, error) {
-	exchange := strings.Split(endpoint, ":")[0]
-	symbols := []string{"BTCUSDT", "DOGEUSDT", "TONUSDT", "SOLUSDT", "ETHUSDT"}
-	var prices []models.Price
-	for _, symbol := range symbols {
-		prices = append(prices, models.Price{
-			Exchange:  exchange,
-			Symbol:    symbol,
-			Price:     1000 + rand.Float64()*99000, // Random price between 1000 and 100000
-			Timestamp: time.Now().UnixNano() / 1e6,
-		})
-	}
-	return prices, nil
 }
 
 // handleHistoricalPrice handles queries for highest, lowest, and average prices

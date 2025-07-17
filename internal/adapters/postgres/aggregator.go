@@ -24,7 +24,7 @@ func NewAggregator(db *sqlx.DB, redis *redis.Client) *Aggregator {
 		db:     db,
 		redis:  redis,
 		ctx:    context.Background(),
-		ticker: time.NewTicker(60 * time.Second),
+		ticker: time.NewTicker(1 * time.Minute), // 1-minute aggregation
 	}
 }
 
@@ -50,13 +50,12 @@ func (a *Aggregator) Stop() {
 }
 
 func (a *Aggregator) aggregateAndStore() error {
-	// Get all price keys
 	keys, err := a.redis.Keys(a.ctx, "price:*:*:updates").Result()
 	if err != nil {
 		return fmt.Errorf("failed to get price keys: %v", err)
 	}
+	logger.Debug("Found price keys", "count", len(keys))
 
-	// Group prices by exchange and symbol
 	type Aggregate struct {
 		MinPrice float64
 		MaxPrice float64
@@ -65,8 +64,6 @@ func (a *Aggregator) aggregateAndStore() error {
 	}
 	aggregates := make(map[string]*Aggregate)
 
-	cutoff := time.Now().Add(-60*time.Second).UnixNano() / 1e6 // 60 seconds ago in ms
-
 	for _, key := range keys {
 		parts := strings.Split(key, ":")
 		if len(parts) != 4 {
@@ -74,7 +71,6 @@ func (a *Aggregator) aggregateAndStore() error {
 		}
 		exchange, symbol := parts[1], parts[2]
 
-		// Get all price updates for this key
 		prices, err := a.redis.HGetAll(a.ctx, key).Result()
 		if err != nil {
 			logger.Warnf("Failed to get prices for %s: %v", key, err)
@@ -82,13 +78,7 @@ func (a *Aggregator) aggregateAndStore() error {
 		}
 
 		agg := &Aggregate{MinPrice: 1e9, MaxPrice: -1e9}
-		for tsStr, priceStr := range prices {
-			ts, err := strconv.ParseInt(tsStr, 10, 64)
-			if err != nil || ts < cutoff {
-				// Delete outdated entries
-				a.redis.HDel(a.ctx, key, tsStr)
-				continue
-			}
+		for _, priceStr := range prices {
 			price, err := strconv.ParseFloat(priceStr, 64)
 			if err != nil {
 				continue

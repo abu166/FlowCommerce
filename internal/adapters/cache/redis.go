@@ -19,7 +19,6 @@ import (
 var client *redis.Client
 
 // InitRedis initializes the Redis client with configuration
-// Change this function signature
 func InitRedis(cfg *config.Config) (*redis.Client, error) {
 	client = redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port),
@@ -57,12 +56,24 @@ func GetRedisClient() *redis.Client {
 	return client
 }
 
+// CheckExchangeHealth verifies if the exchange endpoint is reachable
+func CheckExchangeHealth(endpoint string) error {
+	conn, err := net.DialTimeout("tcp", endpoint, 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("health check failed for %s: %v", endpoint, err)
+	}
+	conn.Close()
+	return nil
+}
+
 // FetchDataFromEndpoint fetches price data and includes exchange
 func FetchDataFromEndpoint(endpoint string) ([]models.Price, error) {
 	const (
-		maxRetries  = 3
+		maxRetries  = 5
 		dialTimeout = 3 * time.Second
 		readTimeout = 30 * time.Second
+		retryDelay  = 1 * time.Second
+		maxRecords  = 250 // Limit records per exchange
 	)
 
 	var (
@@ -70,13 +81,13 @@ func FetchDataFromEndpoint(endpoint string) ([]models.Price, error) {
 		lastErr error
 	)
 
-	// Extract exchange name from endpoint (e.g., "exchange1:40101" -> "exchange1")
 	exchange := strings.Split(endpoint, ":")[0]
 
 	for i := 0; i < maxRetries; i++ {
 		conn, err := net.DialTimeout("tcp", endpoint, dialTimeout)
 		if err != nil {
 			lastErr = fmt.Errorf("dial error: %v", err)
+			time.Sleep(retryDelay)
 			continue
 		}
 		defer conn.Close()
@@ -85,6 +96,8 @@ func FetchDataFromEndpoint(endpoint string) ([]models.Price, error) {
 
 		if _, err := conn.Write([]byte("GET_PRICES\n")); err != nil {
 			lastErr = fmt.Errorf("write error: %v", err)
+			conn.Close()
+			time.Sleep(retryDelay)
 			continue
 		}
 
@@ -99,10 +112,16 @@ func FetchDataFromEndpoint(endpoint string) ([]models.Price, error) {
 			}
 			price.Exchange = exchange
 			prices = append(prices, price)
+			if len(prices) >= maxRecords {
+				logger.Debug("Reached max records limit", "endpoint", endpoint, "count", len(prices))
+				break // Stop reading after maxRecords
+			}
 		}
 
 		if err := scanner.Err(); err != nil {
 			lastErr = fmt.Errorf("read error: %v", err)
+			conn.Close()
+			time.Sleep(retryDelay)
 			continue
 		}
 
@@ -194,7 +213,6 @@ func GetAllPrices() ([]models.Price, error) {
 	}
 
 	for _, key := range keys {
-		// Extract exchange and symbol from key (e.g., price:exchange1:BTCUSDT:updates)
 		parts := strings.Split(key, ":")
 		if len(parts) != 4 {
 			continue
