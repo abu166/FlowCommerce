@@ -1,128 +1,96 @@
 package config
 
 import (
-	"log"
+	"fmt"
 	"os"
 	"strconv"
-	"strings"
+	"time"
 )
 
 type Config struct {
-	Port int
-
-	DB struct {
-		User     string
-		Password string	
-		Host     string
-		Name     string
-		Port     int
-		SSLMode  string
-	}
-
-	Redis struct {
-		Host       string
-		Port       int
-		Password   string
-		DB         int
-		Expiration int
-	}
-
-	AppEnv string
+	Postgres PostgresConfig
+	Redis    RedisConfig
+	APIAddr  string
+	RedisTTL time.Duration
 }
 
-func Load() *Config {
-	loadDotEnv(".env")
+type PostgresConfig struct {
+	Host     string
+	Port     int
+	User     string
+	Password string
+	DBName   string
+	SSLMode  string
+}
 
-	cfg := &Config{}
+type RedisConfig struct {
+	Host       string
+	Port       int
+	Password   string
+	DB         int
+	Expiration string
+}
 
+func Load() (*Config, error) {
 	// First check all required variables
 	required := map[string]string{
-		"DB_USER":     "Database user",
-		"DB_PASSWORD": "Database password",
-		"DB_HOST":     "Database host",
-		"DB_NAME":     "Database name",
-		"DB_PORT":     "Database port",
+		"DB_USER":          os.Getenv("DB_USER"),
+		"DB_PASSWORD":      os.Getenv("DB_PASSOWRD"),
+		"DB_HOST":          os.Getenv("DB_HOST"),
+		"DB_NAME":          os.Getenv("DB_NAME"),
+		"DB_PORT":          os.Getenv("DB_PORT"),
+		"DB_SSLMODE":       os.Getenv("DB_SSLMODE"),
+		"REDIS_HOST":       os.Getenv("REDIS_HOST"),
+		"REDIS_PORT":       os.Getenv("REDIS_PORT"),
+		"REDIS_DB":         os.Getenv("REDIS_DB"),
+		"REDIS_EXPIRATION": os.Getenv("REDIS_EXPIRATION"),
+		"REDIS_TTL":        os.Getenv("REDIS_TTL"),
 	}
 
-	for envVar, desc := range required {
-		if os.Getenv(envVar) == "" {
-			log.Fatalf("Missing required environment variable: %s (%s)", envVar, desc)
+	for key, value := range required {
+		if value == "" {
+			return nil, fmt.Errorf("missing required env variable: %s", key)
 		}
 	}
 
-	// DB config
-	cfg.DB.User = os.Getenv("DB_USER")
-	cfg.DB.Password = os.Getenv("DB_PASSWORD")
-	cfg.DB.Host = os.Getenv("DB_HOST")
-	cfg.DB.Name = os.Getenv("DB_NAME") 
-	cfg.DB.Port = mustGetInt("DB_PORT")
-	cfg.DB.SSLMode = getOrDefault("DB_SSLMODE", "disable")
-
-	// Redis config
-	cfg.Redis.Host = getOrDefault("REDIS_HOST", "redis")
-	cfg.Redis.Port = getOrDefaultInt("REDIS_PORT", 6379)
-	cfg.Redis.Password = getOrDefault("REDIS_PASSWORD", "")
-	cfg.Redis.DB = getOrDefaultInt("REDIS_DB", 0)
-	cfg.Redis.Expiration = getOrDefaultInt("REDIS_EXPIRATION", 3600)
-
-	cfg.AppEnv = getOrDefault("APP_ENV", "development")
-
-	return cfg
-}
-
-func mustGetInt(key string) int {
-	val := os.Getenv(key)
-	if val == "" {
-		log.Fatalf("Missing required env var: %s", key) // Fixed to show key
-	}
-	n, err := strconv.Atoi(val)
+	pgPort, err := strconv.Atoi(os.Getenv("PG_PORT"))
 	if err != nil {
-		log.Fatalf("Invalid integer value for %s: %s", key, val)
+		return nil, fmt.Errorf("invalid PG_PORT: %w", err)
 	}
-	return n
-}
 
-func getOrDefault(key string, def string) string {
-	val := os.Getenv(key)
-	if val == "" {
-		return def
-	}
-	return val
-}
-
-func getOrDefaultInt(key string, def int) int {
-	val := os.Getenv(key)
-	if val == "" {
-		return def
-	}
-	n, err := strconv.Atoi(val)
+	redisPort, err := strconv.Atoi(os.Getenv("REDIS_PORT"))
 	if err != nil {
-		log.Printf("Invalid integer value for %s: %s, using default %d", key, val, def)
-		return def
+		return nil, fmt.Errorf("invalid REDIS_PORT: %w", err)
 	}
-	return n
-}
 
-func loadDotEnv(path string) {
-	data, err := os.ReadFile(path)
+	redisDB, err := strconv.Atoi(os.Getenv("REDIS_DB"))
 	if err != nil {
-		return
+		return nil, fmt.Errorf("invalid REDIS_DB: %w", err)
 	}
 
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		key := strings.TrimSpace(parts[0])
-		val := strings.Trim(strings.TrimSpace(parts[1]), `"`)
-		os.Setenv(key, val)
+	redisTTL, err := time.ParseDuration(os.Getenv("REDIS_TTL"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid REDIS_TTL: %w", err)
 	}
+	
+	cfg := &Config{
+		Postgres: PostgresConfig{
+			Host:     os.Getenv("DB_HOST"),
+			Port:     pgPort,
+			User:     os.Getenv("DB_USER"),
+			Password: os.Getenv("DB_PASSWORD"),
+			DBName:   os.Getenv("DB_NAME"),
+			SSLMode:  os.Getenv("DB_SSLMODE"),
+		},
+		Redis: RedisConfig{
+			Host:       os.Getenv("REDIS_HOST"),
+			Port:       redisPort,
+			Password:   os.Getenv("REDIS_PASSWORD"),
+			DB:         redisDB,
+			Expiration: os.Getenv("REDIS_EXPIRATION"),
+		},
+		RedisTTL: redisTTL,
+	}
+
+	return cfg, nil
 }
