@@ -8,12 +8,12 @@ import (
 )
 
 type Config struct {
-	Postgres PostgresConfig
-	Redis    RedisConfig
+	Postgres         PostgresConfig
+	Redis            RedisConfig
 	Exchanges        []Exchange
 	AggregatorWindow time.Duration
-	APIAddr  string
-	RedisTTL time.Duration
+	APIAddr          string
+	RedisTTL         time.Duration
 }
 
 type PostgresConfig struct {
@@ -39,33 +39,30 @@ type Exchange struct {
 }
 
 func Load() (*Config, error) {
-	// First check all required variables
-	required := map[string]string{
-		"DB_USER":          os.Getenv("DB_USER"),
-		"DB_PASSWORD":      os.Getenv("DB_PASSOWRD"),
-		"DB_HOST":          os.Getenv("DB_HOST"),
-		"DB_NAME":          os.Getenv("DB_NAME"),
-		"DB_PORT":          os.Getenv("DB_PORT"),
-		"DB_SSLMODE":       os.Getenv("DB_SSLMODE"),
-		"REDIS_HOST":       os.Getenv("REDIS_HOST"),
-		"REDIS_PORT":       os.Getenv("REDIS_PORT"),
-		"REDIS_DB":         os.Getenv("REDIS_DB"),
-		"REDIS_EXPIRATION": os.Getenv("REDIS_EXPIRATION"),
-		"REDIS_TTL":        os.Getenv("REDIS_TTL"),
+	requiredEnv := map[string]string{
+		"DB_HOST":           os.Getenv("DB_HOST"),
+		"DB_PORT":           os.Getenv("DB_PORT"),
+		"DB_USER":           os.Getenv("DB_USER"),
+		"DB_PASSWORD":       os.Getenv("DB_PASSWORD"),
+		"DB_NAME":           os.Getenv("DB_NAME"),
+		"DB_SSLMODE":        os.Getenv("DB_SSLMODE"),
+		"REDIS_HOST":        os.Getenv("REDIS_HOST"),
+		"REDIS_PORT":        os.Getenv("REDIS_PORT"),
+		"REDIS_DB":          os.Getenv("REDIS_DB"),
 		"EXCHANGE1_ADDR":    os.Getenv("EXCHANGE1_ADDR"),
 		"EXCHANGE2_ADDR":    os.Getenv("EXCHANGE2_ADDR"),
 		"EXCHANGE3_ADDR":    os.Getenv("EXCHANGE3_ADDR"),
 		"API_ADDR":          os.Getenv("API_ADDR"),
 		"AGGREGATOR_WINDOW": os.Getenv("AGGREGATOR_WINDOW"),
+		"REDIS_TTL":         os.Getenv("REDIS_TTL"),
 	}
-
-	for key, value := range required {
+	for key, value := range requiredEnv {
 		if value == "" {
 			return nil, fmt.Errorf("missing required env variable: %s", key)
 		}
 	}
 
-	pgPort, err := strconv.Atoi(os.Getenv("PG_PORT"))
+	pgPort, err := strconv.Atoi(os.Getenv("DB_PORT"))
 	if err != nil {
 		return nil, fmt.Errorf("invalid PG_PORT: %w", err)
 	}
@@ -80,14 +77,14 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid REDIS_DB: %w", err)
 	}
 
-	redisTTL, err := time.ParseDuration(os.Getenv("REDIS_TTL"))
-	if err != nil {
-		return nil, fmt.Errorf("invalid REDIS_TTL: %w", err)
-	}
-
 	aggregatorWindow, err := time.ParseDuration(os.Getenv("AGGREGATOR_WINDOW"))
 	if err != nil {
 		return nil, fmt.Errorf("invalid AGGREGATOR_WINDOW: %w", err)
+	}
+
+	redisTTL, err := time.ParseDuration(os.Getenv("REDIS_TTL"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid REDIS_TTL: %w", err)
 	}
 
 	cfg := &Config{
@@ -100,11 +97,10 @@ func Load() (*Config, error) {
 			SSLMode:  os.Getenv("DB_SSLMODE"),
 		},
 		Redis: RedisConfig{
-			Host:       os.Getenv("REDIS_HOST"),
-			Port:       redisPort,
-			Password:   os.Getenv("REDIS_PASSWORD"),
-			DB:         redisDB,
-			Expiration: os.Getenv("REDIS_EXPIRATION"),
+			Host:     os.Getenv("REDIS_HOST"),
+			Port:     redisPort,
+			Password: os.Getenv("REDIS_PASSWORD"),
+			DB:       redisDB,
 		},
 		Exchanges: []Exchange{
 			{Name: "exchange1", Address: os.Getenv("EXCHANGE1_ADDR")},
@@ -113,7 +109,7 @@ func Load() (*Config, error) {
 		},
 		APIAddr:          os.Getenv("API_ADDR"),
 		AggregatorWindow: aggregatorWindow,
-		RedisTTL: redisTTL,
+		RedisTTL:         redisTTL,
 	}
 
 	return cfg, nil

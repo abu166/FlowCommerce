@@ -33,12 +33,12 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	db, err := postgres.NewPostgresDB(cfg)
+	repo, err := postgres.NewPostgresDB(cfg)
 	if err != nil {
 		logger.Error("failed to connect to DB", "err", err)
 		return
 	}
-	defer db.Close()
+	defer repo.Close()
 
 	redisAddr := fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port)
 	cache := redis.InitRedis(redisAddr, cfg.Redis.Password, cfg.Redis.DB, cfg.RedisTTL)

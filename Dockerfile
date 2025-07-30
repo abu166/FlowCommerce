@@ -8,7 +8,7 @@ RUN go mod download
 
 COPY . . 
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o app ./cmd/marketflow/main.go
+RUN go build -o app ./cmd/marketflow/main.go
 
 EXPOSE 8080
 
