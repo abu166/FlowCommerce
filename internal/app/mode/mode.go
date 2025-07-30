@@ -3,10 +3,10 @@ package mode
 import (
 	"context"
 	"errors"
+	"marketflow/config"
 	"marketflow/internal/adapters/exchange"
-	"marketflow/internal/config"
-	"marketflow/internal/domain"
-	"marketflow/internal/logger"
+	"marketflow/internal/app/logger"
+	"marketflow/internal/models/domain"
 	"sync"
 )
 

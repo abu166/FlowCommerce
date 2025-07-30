@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"marketflow/internal/adapters/redis"
 	"marketflow/internal/app/logger"
+	"marketflow/internal/app/mode"
 	"marketflow/internal/models/domain"
 	"net/http"
 )

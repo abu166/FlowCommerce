@@ -10,6 +10,8 @@ import (
 type Config struct {
 	Postgres PostgresConfig
 	Redis    RedisConfig
+	Exchanges        []Exchange
+	AggregatorWindow time.Duration
 	APIAddr  string
 	RedisTTL time.Duration
 }
@@ -31,6 +33,11 @@ type RedisConfig struct {
 	Expiration string
 }
 
+type Exchange struct {
+	Name    string
+	Address string
+}
+
 func Load() (*Config, error) {
 	// First check all required variables
 	required := map[string]string{
@@ -45,6 +52,11 @@ func Load() (*Config, error) {
 		"REDIS_DB":         os.Getenv("REDIS_DB"),
 		"REDIS_EXPIRATION": os.Getenv("REDIS_EXPIRATION"),
 		"REDIS_TTL":        os.Getenv("REDIS_TTL"),
+		"EXCHANGE1_ADDR":    os.Getenv("EXCHANGE1_ADDR"),
+		"EXCHANGE2_ADDR":    os.Getenv("EXCHANGE2_ADDR"),
+		"EXCHANGE3_ADDR":    os.Getenv("EXCHANGE3_ADDR"),
+		"API_ADDR":          os.Getenv("API_ADDR"),
+		"AGGREGATOR_WINDOW": os.Getenv("AGGREGATOR_WINDOW"),
 	}
 
 	for key, value := range required {
@@ -72,7 +84,12 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid REDIS_TTL: %w", err)
 	}
-	
+
+	aggregatorWindow, err := time.ParseDuration(os.Getenv("AGGREGATOR_WINDOW"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid AGGREGATOR_WINDOW: %w", err)
+	}
+
 	cfg := &Config{
 		Postgres: PostgresConfig{
 			Host:     os.Getenv("DB_HOST"),
@@ -89,6 +106,13 @@ func Load() (*Config, error) {
 			DB:         redisDB,
 			Expiration: os.Getenv("REDIS_EXPIRATION"),
 		},
+		Exchanges: []Exchange{
+			{Name: "exchange1", Address: os.Getenv("EXCHANGE1_ADDR")},
+			{Name: "exchange2", Address: os.Getenv("EXCHANGE2_ADDR")},
+			{Name: "exchange3", Address: os.Getenv("EXCHANGE3_ADDR")},
+		},
+		APIAddr:          os.Getenv("API_ADDR"),
+		AggregatorWindow: aggregatorWindow,
 		RedisTTL: redisTTL,
 	}
 
