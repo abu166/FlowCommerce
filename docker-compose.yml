@@ -1,13 +1,29 @@
 version: "3.8"
 
 services:
-  exchange:
+  exchange1:
     image: exchange1:latest
     ports:
       - "40101:40101"
     networks:
       - app-network
+  
+  exchange2:
+    image: exchange2:latest
+    ports:
+      - "40102:40102"
+    networks:
+      - app-network
 
+
+  exchange3:
+    image: exchange3:latest
+    ports:
+      - "40103:40103"
+    networks:
+      - app-network
+
+  
   db:
     image: postgres:16
     environment:
@@ -50,22 +66,27 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    ports:
+    ports:  
       - "8080:8080"
     environment:
       - DB_HOST=db
-      - DB_PORT=5432
-      - DB_USER=${DB_USER:-user}
-      - DB_PASSWORD=${DB_PASSWORD:-0000}
-      - DB_NAME=${DB_NAME:-marketflow}
-      - DB_SSLMODE=disable
+      - DB_PORT=${DB_PORT}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - DB_SSLMODE=${DB_SSLMODE}
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=
-      - REDIS_DB=0
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_DB=${REDIS_DB}
+      - REDIS_EXPIRATION=${REDIS_EXPIRATION}
+      - REDIS_TTL=${REDIS_TTL}
+      - EXCHANGE1_ADDR=exchange1:40101
+      - EXCHANGE2_ADDR=exchange2:40102
+      - EXCHANGE3_ADDR=exchange3:40103
+      - API_ADDR=${API_ADDR}
+      - AGGREGATOR_WINDOW=${AGGREGATOR_WINDOW}
       - APP_ENV=development
-      - REDIS_EXPIRATION=300
-      - EXCHANGE_URL=exchange:40101  # Add this line
     volumes:
       - .:/app
     restart: unless-stopped

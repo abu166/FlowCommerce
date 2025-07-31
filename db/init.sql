@@ -1,14 +1,14 @@
-
-DROP TABLE IF EXISTS prices;
-
+DROP TABLE IF EXISTS prices_stats;
 -- Создайте заново
-CREATE TABLE prices (
+CREATE TABLE IF NOT EXISTS price_stats (
     id SERIAL PRIMARY KEY,
-    symbol VARCHAR(20) NOT NULL,
-    price DECIMAL(20,8) NOT NULL,
+    pair_name VARCHAR(20) NOT NULL,
+    exchange VARCHAR(50) NOT NULL,
     timestamp TIMESTAMP NOT NULL,
-     created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    average_price DECIMAL(24, 8) NOT NULL,
+    min_price DECIMAL(24, 8) NOT NULL,
+    max_price DECIMAL(24, 8) NOT NULL,
+    UNIQUE(pair_name, exchange, timestamp)
 );
-
-CREATE INDEX idx_prices_symbol ON prices(symbol);
-CREATE INDEX idx_prices_timestamp ON prices(timestamp);
+CREATE INDEX idx_pair_timestamp ON price_stats(pair_name, timestamp);
+CREATE INDEX idx_exchange_pair_timestamp ON price_stats(exchange, pair_name, timestamp);

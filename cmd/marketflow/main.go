@@ -2,158 +2,98 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
-	"io"
+	"log"
 	"marketflow/config"
-	"marketflow/internal/adapters/cache"
-	"marketflow/internal/adapters/postgres"
+	"marketflow/internal/adapters/redis"
+	"marketflow/internal/adapters/storage/postgres"
+	"marketflow/internal/adapters/web"
+	"marketflow/internal/app/aggregator"
 	"marketflow/internal/app/logger"
-	"net"
+	"marketflow/internal/app/mode"
+	"marketflow/internal/app/pipeline"
+	"marketflow/internal/models/domain"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 )
 
 func main() {
-	// CLI flags
+	env := os.Getenv("APP_ENV")
+	if env == "" {
+		env = "development"
+	}
+	logger.Init(env)
 
+	logger.Info("starting application", "env", env)
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("failed to load config: %v", err)
+	}
 
-	// Load config and init logger
-	cfg := config.Load()
-	logger.Init(cfg.AppEnv)
-
-	// Connect to PostgreSQL
-	db, err := postgres.NewPostgresDB(cfg)
+	repo, err := postgres.NewPostgresDB(cfg)
 	if err != nil {
 		logger.Error("failed to connect to DB", "err", err)
 		return
 	}
-	defer db.Close()
-	logger.Info("connected to PostgreSQL", "host", cfg.DB.Host, "db", cfg.DB.Name)
+	defer repo.Close()
 
-	// Initialize Redis cache
-	cache.InitRedis(cfg)
-	defer cache.CloseRedis()
+	redisAddr := fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port)
+	cache := redis.InitRedis(redisAddr, cfg.Redis.Password, cfg.Redis.DB, cfg.RedisTTL)
+	defer cache.Close()
 
-	// Create basic router
-	router := http.NewServeMux()
+	inputChan := make(chan domain.PriceUpdate, 1000)
+	outputChan := make(chan domain.PriceUpdate, 1000)
 
-	// Register routes
-	router.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		if err := db.Ping(); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte("DB connection error"))
-			return
+	manager := mode.NewManager(cfg)
+	agg := aggregator.NewAggregator(outputChan, repo, cache, cfg.AggregatorWindow)
+
+	go agg.Start(context.Background())
+
+	for i := 0; i < 5; i++ {
+		worker := &pipeline.Worker{
+			ID:     i,
+			Input:  inputChan,
+			Cache:  cache,
+			Output: outputChan,
 		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	})
-
-	router.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("MarketFlow API"))
-	})
-
-	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := net.Dial("tcp", "exchange:40101")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
+		worker.Start(context.Background())
+	}
+	if err := manager.Start(inputChan, mode.Test); err != nil {
+		if err.Error() == "mode already set" {
+			logger.Warn("initial mode already set, continuing")
+		} else {
+			log.Fatalf("failed to start test mode: %v", err)
 		}
-		defer conn.Close()
+	}
 
-		w.Header().Set("Content-Type", "application/json")
-		io.Copy(w, conn)
-	})
+	apiServer := web.NewServer(repo, cache, manager)
 
-	// Channel for graceful shutdown
-	stopChan := make(chan os.Signal, 1)
-	signal.Notify(stopChan, syscall.SIGINT, syscall.SIGTERM)
+	srv := &http.Server{
+		Addr:    cfg.APIAddr,
+		Handler: apiServer.Router(inputChan), // создадим метод Router() чуть ниже
+	}
 
-	// WaitGroup to wait for background goroutines
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	// Context for cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-
-	conn, _ := net.Dial("tcp", "exchange:40101")
-    conn.Write([]byte("TEST\n"))
-    buf := make([]byte, 1024)
-    n, _ := conn.Read(buf)
-    fmt.Println("Received:", string(buf[:n]))
-	
-	port := flag.Int("port", 8080, "Port number")
-	flag.Parse()
-
-	// Start background worker for data fetching and saving
 	go func() {
-		defer wg.Done()
-
-		ticker := time.NewTicker(3 * time.Second)
-		defer ticker.Stop()
-
-		logger.Info("Background worker started")
-			select {
-			case <-ticker.C:
-				logger.Debug("Starting data fetch cycle")
-
-				// Fetch data from endpoint
-				prices, err := cache.FetchDataFromEndpoint()
-				if err != nil {
-					logger.Error("Error fetching data", "error", err)
-					
-				}
-				logger.Debug("Fetched prices", "count", len(prices), "first_symbol", prices[0].Symbol)
-
-				// Cache data in Redis
-				if err := cache.CacheDataInRedis(prices); err != nil {
-					logger.Error("Error caching data in Redis", "error", err)
-					
-				}
-				logger.Debug("Successfully cached prices in Redis")
-
-				// Save data to PostgreSQL
-				if err := postgres.SavePrices(db, prices); err != nil {
-					logger.Error("Error saving prices to PostgreSQL", "error", err, "prices", prices)
-					
-				}
-				logger.Info("Successfully processed prices",
-					"count", len(prices),
-					"redis_success", true,
-					"postgres_success", true)
-
-			case <-ctx.Done():
-				logger.Info("Stopping background worker")
-				return
-			}
-		
-	}()
-
-	// Start server in a separate goroutine
-	go func() {
-		addr := fmt.Sprintf(":%d", *port)
-		logger.Info("starting server", "address", addr)
-
-		if err := http.ListenAndServe(addr, router); err != nil {
-			logger.Error("server failed", "error", err)
-			stopChan <- syscall.SIGTERM // Trigger shutdown
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("API server failed", "error", err)
+			log.Fatalf("API server failed: %v", err)
 		}
 	}()
 
-	// Wait for shutdown signal
-	<-stopChan
-	logger.Info("Shutting down server...")
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
-	// Cancel context and wait for background goroutines
-	cancel()
-	wg.Wait()
+	<-stop
+	logger.Info("shutting down...")
 
-	logger.Info("Server stopped gracefully")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("API shutdown error", "error", err)
+	}
+	logger.Info("shutdown complete")
 }
